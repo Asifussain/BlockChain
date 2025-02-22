@@ -5,6 +5,9 @@ from .utils import get_local_ip
 
 class Peer:
     def __init__(self):
+        
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.name = input("Enter your name: ")
         self.port = int(input("Enter your port number: "))
         self.ip = get_local_ip()
@@ -61,58 +64,62 @@ class Peer:
         except:
             print(f"Failed to connect to peer {ip}:{port}")
 
-    def handle_client(self, client, address):
-        while True:
-            try:
-                buffer = client.recv(1024).decode().strip()
-                if not buffer:
-                    continue
-                
-                # Parse sender's port from message header
-                sender_port = address[1]  # Default fallback
-                if buffer.startswith('<'):
-                    gt_pos = buffer.find('>')
-                    if gt_pos != -1:
-                        colon_pos = buffer.find(':', 1)
-                        if colon_pos != -1 and colon_pos < gt_pos:
-                            try:
-                                sender_port = int(buffer[colon_pos+1:gt_pos])
-                            except ValueError:
-                                pass
-
-                # Extract message content
-                content = buffer
-                pos = content.find("> ")
-                if pos != -1:
-                    content = content[pos + 2:]
-
-                if content == "DISCONNECT":
-                    self.remove_peer((address[0], sender_port))
-                    print(f"\nPeer {address[0]}:{sender_port} disconnected")
-                    break
-                else:
-                    self.add_peer(address[0], sender_port)
-                    print(f"\nMessage from {address[0]}:{sender_port} -\n{buffer}")
-                    
-            except Exception as e:
-                print(f"Error handling client: {e}")
+def handle_client(self, client, address):
+    client.settimeout(60)  # Add timeout
+    while True:
+        try:
+            buffer = client.recv(1024).decode('utf-8').strip()
+            if not buffer:
                 break
-        client.close()
+                
+            sender_port = address[1]
+            content = buffer
+            
+            # Parse message format: <IP:PORT> NAME: MESSAGE
+            if buffer.startswith('<'):
+                parts = buffer.split('>', 1)
+                if len(parts) == 2:
+                    header = parts[0][1:]  # Remove '<'
+                    content = parts[1].strip()
+                    if ':' in header:
+                        sender_ip, sender_port = header.split(':')
+                        sender_port = int(sender_port)
+
+            if content == "DISCONNECT":
+                self.remove_peer((address[0], sender_port))
+                print(f"\nPeer {address[0]}:{sender_port} disconnected")
+                break
+            else:
+                self.add_peer(address[0], sender_port)
+                print(f"\nMessage from {address[0]}:{sender_port} -\n{content}")
+                
+        except socket.timeout:
+            print(f"Connection timed out with {address[0]}:{address[1]}")
+            break
+        except Exception as e:
+            print(f"Error handling client: {e}")
+            break
+    client.close()
+
 
 
     def send_message(self, ip, port, message):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(5) 
                 s.connect((ip, port))
                 if message == "DISCONNECT":
                     formatted_message = f"<{self.ip}:{self.port}> DISCONNECT"
                 else:
-                    formatted_message = f"{self.ip}:{self.port}  {self.name}\n{message}\n"
-                s.sendall(formatted_message.encode())
+                    formatted_message = f"<{self.ip}:{self.port}> {self.name}: {message}\n"
+                s.sendall(formatted_message.encode('utf-8'))
                 print(f"Message sent to {ip}:{port}")
-        except:
-            print(f"Failed to send message to {ip}:{port}")
-
+        except socket.timeout:
+            print(f"Connection timed out while trying to reach {ip}:{port}")
+        except ConnectionRefusedError:
+            print(f"Connection refused by peer {ip}:{port}. Make sure the peer is active.")
+        except Exception as e:
+            print(f"Failed to send message to {ip}:{port}. Error: {str(e)}")
 
 
     def add_peer(self, ip, port):
